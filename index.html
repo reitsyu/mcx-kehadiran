@@ -1,33 +1,164 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Media Center X Kepenulisan — Kehadiran</title>
-  <link rel="stylesheet" href="style.css" />
-  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Media Center X Kepenulisan — Kehadiran</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="dot"></span>
-      <div>
-        <h1>Media Center X Kepenulisan</h1>
-        <p class="sub">Sistem Kehadiran</p>
+
+<header class="topbar">
+  <h1>Media Center X Kepenulisan</h1>
+  <p>Sistem Kehadiran Ekstrakurikuler</p>
+</header>
+
+<main id="app">
+
+  <!-- ================= LOADING ================= -->
+  <div id="screen-loading" class="center-screen">
+    <p>Memuat...</p>
+  </div>
+
+  <!-- ================= ROLE PICKER ================= -->
+  <div id="screen-role" class="hidden center-screen">
+    <div class="card">
+      <h2>Masuk sebagai</h2>
+      <div class="role-grid">
+        <button class="btn-primary btn-block" data-role="admin">Admin</button>
+        <button class="btn-primary btn-block" data-role="petugas">Petugas</button>
+      </div>
+      <p class="helper-text">Anggota tidak perlu login. Cukup scan QR presensi yang dibagikan Petugas/Admin.</p>
+    </div>
+  </div>
+
+  <!-- ================= LOGIN ================= -->
+  <div id="screen-login" class="hidden center-screen">
+    <div class="card">
+      <h2 id="login-title">Login</h2>
+      <label for="login-password">Password</label>
+      <input type="password" id="login-password" placeholder="Masukkan password">
+      <div id="login-error" class="error-box hidden"></div>
+      <div class="btn-row">
+        <button class="btn-outline" id="btn-back-role">Kembali</button>
+        <button class="btn-primary" id="btn-do-login">Masuk</button>
       </div>
     </div>
-    <nav id="nav"></nav>
-  </header>
+  </div>
 
-  <main id="app"></main>
+  <!-- ================= ANGGOTA: FORM ================= -->
+  <div id="screen-anggota-form" class="hidden">
+    <div class="card">
+      <h2>Presensi Kehadiran</h2>
+      <div class="notice">WAJIB MASUKKAN NAMA LENGKAP, TANPA SINGKATAN.<br>Contoh: RADEN PRATAMA — bukan RADEN P. atau nama panggilan.</div>
 
-  <footer>
-    <small>© Media Center X Kepenulisan</small>
-  </footer>
+      <label for="f-nama">Nama Lengkap</label>
+      <input type="text" id="f-nama" placeholder="Nama lengkap sesuai identitas">
 
-  <div id="toast" class="toast"></div>
+      <label for="f-tingkat">Tingkat</label>
+      <select id="f-tingkat">
+        <option value="">Pilih tingkat</option>
+        <option value="X">X</option>
+        <option value="XI">XI</option>
+        <option value="XII">XII</option>
+      </select>
 
-  <script src="app.js"></script>
+      <label for="f-rombel">Rombel</label>
+      <select id="f-rombel">
+        <option value="">Pilih rombel</option>
+        <option>A</option><option>B</option><option>C</option><option>D</option>
+        <option>E</option><option>F</option><option>G</option><option>H</option>
+        <option>I</option><option>J</option>
+      </select>
+
+      <div id="anggota-error" class="error-box hidden"></div>
+
+      <button class="btn-primary btn-block" style="margin-top:16px" id="btn-submit-hadir">HADIR</button>
+    </div>
+  </div>
+
+  <!-- ================= ANGGOTA: SUCCESS ================= -->
+  <div id="screen-anggota-success" class="hidden center-screen">
+    <div class="card">
+      <h2>Berhasil</h2>
+      <div class="success-box" id="success-msg">Kehadiran tercatat.</div>
+      <p class="helper-text">Kamu boleh menutup halaman ini.</p>
+    </div>
+  </div>
+
+  <!-- ================= ANGGOTA: BLOCKED / INVALID SESSION ================= -->
+  <div id="screen-anggota-blocked" class="hidden center-screen">
+    <div class="card">
+      <h2>Sesi Tidak Tersedia</h2>
+      <div class="error-box" id="blocked-msg">Sesi presensi ini sudah tidak aktif.</div>
+    </div>
+  </div>
+
+  <!-- ================= ADMIN / PETUGAS DASHBOARD ================= -->
+  <div id="screen-dashboard" class="hidden">
+    <div class="top-actions">
+      <span class="role-tag" id="dash-role-tag">ADMIN</span>
+      <button class="btn-outline btn-sm" id="btn-logout">Keluar</button>
+    </div>
+
+    <!-- SESI -->
+    <div class="card">
+      <h2>Sesi Presensi Hari Ini</h2>
+      <div class="session-status">
+        <span>Status:</span>
+        <span class="status-badge status-closed" id="session-badge">TERTUTUP</span>
+      </div>
+
+      <div id="qr-area" class="qr-box hidden">
+        <div id="qrcode"></div>
+        <div class="countdown" id="countdown-text">05:00</div>
+        <p class="helper-text">Anggota scan QR di atas untuk presensi</p>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-primary" id="btn-open-session">BUKA SESI PRESENSI</button>
+        <button class="btn-danger hidden" id="btn-close-session">TUTUP SESI</button>
+      </div>
+    </div>
+
+    <!-- STAT HARI INI -->
+    <div class="card">
+      <h2>Kehadiran Hari Ini</h2>
+      <div class="stat-row">
+        <div class="stat-box"><div class="num" id="stat-hadir">0</div><div class="lbl">Hadir</div></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn-outline" id="btn-export-today">Export DOCX Hari Ini</button>
+      </div>
+      <div style="overflow-x:auto;margin-top:10px;">
+        <table class="attendance-table" id="today-table">
+          <thead><tr><th>Waktu</th><th>Nama</th><th>Kelas</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- KELOLA PETUGAS (ADMIN ONLY) -->
+    <div class="card hidden" id="card-kelola-petugas">
+      <h2>Kelola Akses Petugas</h2>
+      <label for="new-petugas-pass">Password Petugas Baru</label>
+      <input type="text" id="new-petugas-pass" placeholder="Password baru untuk Petugas">
+      <div id="petugas-pass-msg"></div>
+      <button class="btn-primary" style="margin-top:10px" id="btn-save-petugas-pass">Simpan</button>
+    </div>
+
+    <!-- RIWAYAT (ADMIN ONLY) -->
+    <div class="card hidden" id="card-riwayat">
+      <h2>Riwayat Pertemuan</h2>
+      <div id="riwayat-container"></div>
+    </div>
+  </div>
+
+</main>
+
+<footer class="foot">Media Center X Kepenulisan &copy; 2026</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
