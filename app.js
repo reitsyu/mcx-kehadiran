@@ -40,6 +40,7 @@ let currentPassword = null;
 let currentSessionId = null;
 let countdownTimer = null;
 let dashboardPollTimer = null;
+let lastDashboard = null; // cache respons getDashboard terakhir, dipakai untuk export DOCX
 
 /* ======================================================
    ROUTER — jalan pertama kali
@@ -212,6 +213,7 @@ function enterDashboard() {
 async function loadDashboard() {
   try {
     const res = await callApi("getDashboard", { role: currentRole, password: currentPassword });
+    lastDashboard = res;
     renderSession(res.session);
     renderToday(res.todayAttendance || []);
     $("stat-hadir").textContent = (res.todayAttendance || []).length;
@@ -387,25 +389,128 @@ async function savePetugasPassword() {
   }
 }
 
-/* ---------------- EXPORT DOCX ---------------- */
+/* ---------------- EXPORT DOCX (dibuat langsung di browser) ---------------- */
+
+const HARI_ID = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+const BULAN_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+
+function hariIndoJS(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  return HARI_ID[d.getDay()];
+}
+function tanggalLabelJS(dateStr) {
+  const parts = dateStr.split("-");
+  const d = parseInt(parts[2], 10);
+  const m = parseInt(parts[1], 10) - 1;
+  const y = parts[0];
+  return `${d} ${BULAN_ID[m]} ${y}`;
+}
+
+function getRowsForDate(tanggal) {
+  if (!lastDashboard) return null;
+  if (tanggal === todayLabelISO()) return lastDashboard.todayAttendance || [];
+  if (lastDashboard.history) {
+    const meeting = lastDashboard.history.find(m => m.tanggal === tanggal);
+    if (meeting) return meeting.rows;
+  }
+  return null;
+}
+
 async function exportDocx(tanggal) {
+  const rows = getRowsForDate(tanggal);
+  if (rows === null) {
+    alert("Data pertemuan tidak ditemukan. Coba muat ulang dashboard.");
+    return;
+  }
+  if (typeof docx === "undefined") {
+    alert("Library DOCX gagal dimuat. Periksa koneksi internet lalu coba lagi.");
+    return;
+  }
+
+  const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+          AlignmentType, WidthType, BorderStyle, HeadingLevel } = docx;
+
+  const cellBorder = {
+    top: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+    bottom: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+    left: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+    right: { style: BorderStyle.SINGLE, size: 2, color: "000000" }
+  };
+
+  function headerPara(text, size, bold) {
+    return new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 0 },
+      children: [ new TextRun({ text, bold, size: size * 2 }) ] // size dalam half-points
+    });
+  }
+
+  function cell(text, opts = {}) {
+    return new TableCell({
+      borders: cellBorder,
+      width: opts.width ? { size: opts.width, type: WidthType.PERCENTAGE } : undefined,
+      children: [ new Paragraph({
+        alignment: opts.align || AlignmentType.LEFT,
+        children: [ new TextRun({ text: String(text), bold: !!opts.bold }) ]
+      }) ]
+    });
+  }
+
+  const headerRow = new TableRow({
+    tableHeader: true,
+    children: [
+      cell("No", { bold: true, align: AlignmentType.CENTER, width: 12 }),
+      cell("Nama Lengkap", { bold: true, width: 88 })
+    ]
+  });
+
+  const bodyRows = rows.length === 0
+    ? [ new TableRow({ children: [ cell("", { align: AlignmentType.CENTER }), cell("(Tidak ada data kehadiran)") ] }) ]
+    : rows.map((r, idx) => new TableRow({
+        children: [
+          cell(idx + 1, { align: AlignmentType.CENTER }),
+          cell(r.nama)
+        ]
+      }));
+
+  const table = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [headerRow, ...bodyRows]
+  });
+
+  const doc = new Document({
+    sections: [{
+      properties: {},
+      children: [
+        headerPara("PEMERINTAH DAERAH PROVINSI JAWA TIMUR", 12, true),
+        headerPara("DINAS PENDIDIKAN", 12, true),
+        headerPara("SMA NEGERI 1 LUMAJANG", 14, true),
+        headerPara("Jl. Jendral Ahmad Yani No.07 Telp./Fax (0334) 881747. Lumajang 67316", 9, false),
+        headerPara("Website : www.sman1lmj.sch.id   e-mail : smanegerisatulumajang@gmail.com", 9, false),
+        new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: "000000" } }, spacing: { after: 200 } }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [ new TextRun({ text: "DAFTAR HADIR MEDIA CENTER", bold: true, size: 28 }) ],
+          spacing: { after: 200 }
+        }),
+        new Paragraph({ text: `Hari/Tanggal : ${hariIndoJS(tanggal)}, ${tanggalLabelJS(tanggal)}`, spacing: { after: 200 } }),
+        table
+      ]
+    }]
+  });
+
   try {
-    const res = await callApi("exportDocx", { role: currentRole, password: currentPassword, tanggal });
-    const byteChars = atob(res.base64);
-    const byteNumbers = new Array(byteChars.length);
-    for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+    const blob = await Packer.toBlob(doc);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = res.filename;
+    a.download = `Absensi_Media_Center_${tanggal}.docx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
   } catch (err) {
-    alert(err.message);
+    alert("Gagal membuat file DOCX: " + err.message);
   }
 }
 
