@@ -389,7 +389,10 @@ async function savePetugasPassword() {
   }
 }
 
-/* ---------------- EXPORT DOCX (dibuat langsung di browser) ---------------- */
+/* ---------------- EXPORT DOCX (dibangun manual sebagai ZIP+XML, pakai JSZip) ---------------- */
+/* File .docx sebenarnya adalah file ZIP berisi beberapa file XML.
+   Pendekatan ini menghindari ketergantungan pada library "docx" pihak ketiga
+   yang CDN/bundle-nya sering berubah-ubah dan gampang gagal dimuat. */
 
 const HARI_ID = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 const BULAN_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
@@ -416,91 +419,111 @@ function getRowsForDate(tanggal) {
   return null;
 }
 
+function xmlEscape(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function docxParagraph(text, { bold = false, size = 22, center = true } = {}) {
+  const jc = center ? '<w:jc w:val="center"/>' : "";
+  const b = bold ? "<w:b/>" : "";
+  return `<w:p><w:pPr>${jc}<w:spacing w:after="0"/></w:pPr><w:r><w:rPr>${b}<w:sz w:val="${size}"/></w:rPr><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+}
+
+function docxCell(text, { bold = false, width = 2000, center = false } = {}) {
+  const jc = center ? '<w:jc w:val="center"/>' : "";
+  const b = bold ? "<w:b/>" : "";
+  return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/></w:tcPr><w:p><w:pPr>${jc}</w:pPr><w:r><w:rPr>${b}</w:rPr><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p></w:tc>`;
+}
+
+function buildDocumentXml(tanggal, rows) {
+  const borders = `
+    <w:tblBorders>
+      <w:top w:val="single" w:sz="4" w:color="000000"/>
+      <w:left w:val="single" w:sz="4" w:color="000000"/>
+      <w:bottom w:val="single" w:sz="4" w:color="000000"/>
+      <w:right w:val="single" w:sz="4" w:color="000000"/>
+      <w:insideH w:val="single" w:sz="4" w:color="000000"/>
+      <w:insideV w:val="single" w:sz="4" w:color="000000"/>
+    </w:tblBorders>`;
+
+  const headerRow = `<w:tr>${docxCell("No", { bold: true, width: 900, center: true })}${docxCell("Nama Lengkap", { bold: true, width: 7500 })}</w:tr>`;
+
+  const bodyRows = rows.length === 0
+    ? `<w:tr>${docxCell("", { width: 900, center: true })}${docxCell("(Tidak ada data kehadiran)", { width: 7500 })}</w:tr>`
+    : rows.map((r, idx) => `<w:tr>${docxCell(String(idx + 1), { width: 900, center: true })}${docxCell(r.nama, { width: 7500 })}</w:tr>`).join("");
+
+  const table = `
+    <w:tbl>
+      <w:tblPr>${borders}<w:tblW w:w="8400" w:type="dxa"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="900"/><w:gridCol w:w="7500"/></w:tblGrid>
+      ${headerRow}
+      ${bodyRows}
+    </w:tbl>`;
+
+  const header = [
+    docxParagraph("PEMERINTAH DAERAH PROVINSI JAWA TIMUR", { bold: true, size: 24 }),
+    docxParagraph("DINAS PENDIDIKAN", { bold: true, size: 24 }),
+    docxParagraph("SMA NEGERI 1 LUMAJANG", { bold: true, size: 28 }),
+    docxParagraph("Jl. Jendral Ahmad Yani No.07 Telp./Fax (0334) 881747. Lumajang 67316", { size: 18 }),
+    docxParagraph("Website : www.sman1lmj.sch.id   e-mail : smanegerisatulumajang@gmail.com", { size: 18 }),
+    `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr></w:pPr></w:p>`,
+    docxParagraph("DAFTAR HADIR MEDIA CENTER", { bold: true, size: 26 }),
+    `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t xml:space="preserve">Hari/Tanggal : ${xmlEscape(hariIndoJS(tanggal) + ", " + tanggalLabelJS(tanggal))}</w:t></w:r></w:p>`,
+    `<w:p/>`
+  ].join("");
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${header}
+    ${table}
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+}
+
+const CONTENT_TYPES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+const RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
 async function exportDocx(tanggal) {
   const rows = getRowsForDate(tanggal);
   if (rows === null) {
     alert("Data pertemuan tidak ditemukan. Coba muat ulang dashboard.");
     return;
   }
-  if (typeof docx === "undefined") {
-    alert("Library DOCX gagal dimuat. Periksa koneksi internet lalu coba lagi.");
+  if (typeof JSZip === "undefined") {
+    alert("Library ZIP gagal dimuat. Periksa koneksi internet lalu coba lagi.");
     return;
   }
 
-  const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-          AlignmentType, WidthType, BorderStyle, HeadingLevel } = docx;
-
-  const cellBorder = {
-    top: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
-    bottom: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
-    left: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
-    right: { style: BorderStyle.SINGLE, size: 2, color: "000000" }
-  };
-
-  function headerPara(text, size, bold) {
-    return new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 0 },
-      children: [ new TextRun({ text, bold, size: size * 2 }) ] // size dalam half-points
-    });
-  }
-
-  function cell(text, opts = {}) {
-    return new TableCell({
-      borders: cellBorder,
-      width: opts.width ? { size: opts.width, type: WidthType.PERCENTAGE } : undefined,
-      children: [ new Paragraph({
-        alignment: opts.align || AlignmentType.LEFT,
-        children: [ new TextRun({ text: String(text), bold: !!opts.bold }) ]
-      }) ]
-    });
-  }
-
-  const headerRow = new TableRow({
-    tableHeader: true,
-    children: [
-      cell("No", { bold: true, align: AlignmentType.CENTER, width: 12 }),
-      cell("Nama Lengkap", { bold: true, width: 88 })
-    ]
-  });
-
-  const bodyRows = rows.length === 0
-    ? [ new TableRow({ children: [ cell("", { align: AlignmentType.CENTER }), cell("(Tidak ada data kehadiran)") ] }) ]
-    : rows.map((r, idx) => new TableRow({
-        children: [
-          cell(idx + 1, { align: AlignmentType.CENTER }),
-          cell(r.nama)
-        ]
-      }));
-
-  const table = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [headerRow, ...bodyRows]
-  });
-
-  const doc = new Document({
-    sections: [{
-      properties: {},
-      children: [
-        headerPara("PEMERINTAH DAERAH PROVINSI JAWA TIMUR", 12, true),
-        headerPara("DINAS PENDIDIKAN", 12, true),
-        headerPara("SMA NEGERI 1 LUMAJANG", 14, true),
-        headerPara("Jl. Jendral Ahmad Yani No.07 Telp./Fax (0334) 881747. Lumajang 67316", 9, false),
-        headerPara("Website : www.sman1lmj.sch.id   e-mail : smanegerisatulumajang@gmail.com", 9, false),
-        new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: "000000" } }, spacing: { after: 200 } }),
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [ new TextRun({ text: "DAFTAR HADIR MEDIA CENTER", bold: true, size: 28 }) ],
-          spacing: { after: 200 }
-        }),
-        new Paragraph({ text: `Hari/Tanggal : ${hariIndoJS(tanggal)}, ${tanggalLabelJS(tanggal)}`, spacing: { after: 200 } }),
-        table
-      ]
-    }]
-  });
-
   try {
-    const blob = await Packer.toBlob(doc);
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", CONTENT_TYPES_XML);
+    zip.folder("_rels").file(".rels", RELS_XML);
+    zip.folder("word").file("document.xml", buildDocumentXml(tanggal, rows));
+
+    const blob = await zip.generateAsync({
+      type: "blob",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    });
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
