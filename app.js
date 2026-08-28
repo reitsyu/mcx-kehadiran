@@ -133,6 +133,7 @@ async function initAnggotaFlow(sessionId) {
     }
     show("screen-anggota-form");
     bindAnggotaForm(sessionId);
+    setupTtdPad();
   } catch (err) {
     showBlocked("Sesi presensi tidak ditemukan atau tidak valid.");
   }
@@ -143,6 +144,9 @@ function showBlocked(msg) {
   show("screen-anggota-blocked");
 }
 
+/* ---------------- STEP 1: FORM DATA ---------------- */
+let pendingAnggota = null; // { nama, tingkat, rombel }
+
 function bindAnggotaForm(sessionId) {
   $("f-nama").addEventListener("input", () => {
     const cursor = $("f-nama").selectionStart;
@@ -150,36 +154,48 @@ function bindAnggotaForm(sessionId) {
     $("f-nama").setSelectionRange(cursor, cursor);
   });
 
-  $("btn-submit-hadir").onclick = async () => {
+  $("btn-lanjut-ttd").onclick = () => {
     const nama = $("f-nama").value.trim().toUpperCase();
     const tingkat = $("f-tingkat").value;
     const rombel = $("f-rombel").value;
     $("anggota-error").classList.add("hidden");
 
-    if (!nama || nama.split(" ").length < 1) {
-      return anggotaError("Nama lengkap wajib diisi.");
-    }
-    if (nama.length < 3) {
-      return anggotaError("Nama terlalu pendek. Masukkan nama lengkap.");
-    }
+    if (!nama) return anggotaError("Nama lengkap wajib diisi.");
+    if (nama.length < 3) return anggotaError("Nama terlalu pendek. Masukkan nama lengkap.");
     if (!tingkat) return anggotaError("Pilih tingkat.");
     if (!rombel) return anggotaError("Pilih rombel.");
 
-    $("btn-submit-hadir").disabled = true;
-    $("btn-submit-hadir").textContent = "Memproses...";
+    pendingAnggota = { nama, tingkat, rombel };
+    show("screen-anggota-ttd");
+  };
+
+  $("btn-ttd-kembali").onclick = () => show("screen-anggota-form");
+  $("btn-ttd-undo").onclick = () => ttdUndo();
+  $("btn-ttd-clear").onclick = () => ttdClear();
+
+  $("btn-ttd-confirm").onclick = async () => {
+    $("ttd-error").classList.add("hidden");
+    if (ttdIsEmpty()) return ttdError("Tanda tangan belum diisi.");
+    if (!pendingAnggota) { show("screen-anggota-form"); return; }
+
+    $("btn-ttd-confirm").disabled = true;
+    $("btn-ttd-confirm").textContent = "Memproses...";
 
     try {
       const res = await callApi("submitAttendance", {
         sessionId,
-        nama, tingkat, rombel,
-        deviceId: getDeviceId()
+        nama: pendingAnggota.nama,
+        tingkat: pendingAnggota.tingkat,
+        rombel: pendingAnggota.rombel,
+        deviceId: getDeviceId(),
+        ttd: ttdToBase64Png()
       });
       $("success-msg").textContent = `Kehadiran atas nama ${res.nama} (${res.tingkat}-${res.rombel}) berhasil dicatat pukul ${res.waktu}.`;
       show("screen-anggota-success");
     } catch (err) {
-      anggotaError(err.message);
-      $("btn-submit-hadir").disabled = false;
-      $("btn-submit-hadir").textContent = "HADIR";
+      ttdError(err.message);
+      $("btn-ttd-confirm").disabled = false;
+      $("btn-ttd-confirm").textContent = "Konfirmasi Kehadiran";
     }
   };
 }
@@ -187,6 +203,105 @@ function bindAnggotaForm(sessionId) {
 function anggotaError(msg) {
   $("anggota-error").textContent = msg;
   $("anggota-error").classList.remove("hidden");
+}
+function ttdError(msg) {
+  $("ttd-error").textContent = msg;
+  $("ttd-error").classList.remove("hidden");
+}
+
+/* ---------------- STEP 2: SIGNATURE PAD ---------------- */
+let ttdCanvas = null;
+let ttdCtx = null;
+let ttdStrokes = [];
+let ttdPadReady = false;
+
+function setupTtdPad() {
+  if (ttdPadReady) return; // hanya inisialisasi sekali
+  ttdPadReady = true;
+
+  const canvas = $("ttd-canvas");
+  canvas.width = 600;  // resolusi internal tetap, kecil & konsisten
+  canvas.height = 220;
+  ttdCanvas = canvas;
+  ttdCtx = canvas.getContext("2d");
+  clearCanvasBg();
+
+  let drawing = false;
+  let currentStroke = null;
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches && e.touches[0];
+    const clientX = t ? t.clientX : e.clientX;
+    const clientY = t ? t.clientY : e.clientY;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  }
+
+  function startDraw(e) {
+    e.preventDefault();
+    drawing = true;
+    const pos = getPos(e);
+    currentStroke = [pos];
+    ttdCtx.beginPath();
+    ttdCtx.moveTo(pos.x, pos.y);
+  }
+  function moveDraw(e) {
+    if (!drawing) return;
+    e.preventDefault();
+    const pos = getPos(e);
+    currentStroke.push(pos);
+    ttdCtx.lineTo(pos.x, pos.y);
+    ttdCtx.stroke();
+  }
+  function endDraw(e) {
+    if (!drawing) return;
+    drawing = false;
+    if (currentStroke && currentStroke.length > 1) ttdStrokes.push(currentStroke);
+    currentStroke = null;
+  }
+
+  canvas.addEventListener("mousedown", startDraw);
+  canvas.addEventListener("mousemove", moveDraw);
+  window.addEventListener("mouseup", endDraw);
+  canvas.addEventListener("touchstart", startDraw, { passive: false });
+  canvas.addEventListener("touchmove", moveDraw, { passive: false });
+  canvas.addEventListener("touchend", endDraw);
+}
+
+function clearCanvasBg() {
+  ttdCtx.fillStyle = "#ffffff";
+  ttdCtx.fillRect(0, 0, ttdCanvas.width, ttdCanvas.height);
+  ttdCtx.strokeStyle = "#2b2622";
+  ttdCtx.lineWidth = 3;
+  ttdCtx.lineJoin = "round";
+  ttdCtx.lineCap = "round";
+}
+
+function redrawTtd() {
+  clearCanvasBg();
+  ttdStrokes.forEach(stroke => {
+    ttdCtx.beginPath();
+    ttdCtx.moveTo(stroke[0].x, stroke[0].y);
+    for (let i = 1; i < stroke.length; i++) ttdCtx.lineTo(stroke[i].x, stroke[i].y);
+    ttdCtx.stroke();
+  });
+}
+
+function ttdUndo() {
+  ttdStrokes.pop();
+  redrawTtd();
+}
+function ttdClear() {
+  ttdStrokes = [];
+  redrawTtd();
+}
+function ttdIsEmpty() {
+  return ttdStrokes.length === 0;
+}
+function ttdToBase64Png() {
+  return ttdCanvas.toDataURL("image/png").split(",")[1];
 }
 
 /* ======================================================
@@ -443,7 +558,7 @@ function makeZip(files) {
 
   files.forEach(f => {
     const nameBytes = strToBytes(f.name);
-    const contentBytes = strToBytes(f.content);
+    const contentBytes = f.contentBytes ? f.contentBytes : strToBytes(f.content);
     const crc = crc32(contentBytes);
     const size = contentBytes.length;
 
@@ -559,7 +674,50 @@ function docxCell(text, { bold = false, width = 2000, center = false } = {}) {
   return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/></w:tcPr><w:p><w:pPr>${jc}</w:pPr><w:r><w:rPr>${b}</w:rPr><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p></w:tc>`;
 }
 
-function buildDocumentXml(tanggal, rows) {
+function docxCellImage(rId, width, { cx = 1080000, cy = 380000 } = {}) {
+  return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing>
+    <wp:inline distT="0" distB="0" distL="0" distR="0">
+      <wp:extent cx="${cx}" cy="${cy}"/>
+      <wp:effectExtent l="0" t="0" r="0" b="0"/>
+      <wp:docPr id="${rId}" name="TandaTangan${rId}"/>
+      <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+      <a:graphic>
+        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+          <pic:pic>
+            <pic:nvPicPr>
+              <pic:cNvPr id="${rId}" name="TandaTangan${rId}"/>
+              <pic:cNvPicPr/>
+            </pic:nvPicPr>
+            <pic:blipFill>
+              <a:blip r:embed="rId${rId}"/>
+              <a:stretch><a:fillRect/></a:stretch>
+            </pic:blipFill>
+            <pic:spPr>
+              <a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>
+              <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+            </pic:spPr>
+          </pic:pic>
+        </a:graphicData>
+      </a:graphic>
+    </wp:inline>
+  </w:drawing></w:r></w:p></w:tc>`;
+}
+
+function base64ToBytes(b64) {
+  const binStr = atob(b64);
+  const bytes = new Uint8Array(binStr.length);
+  for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+  return bytes;
+}
+
+const PEMBINA_NAME = "Eka Meilinda Fitriana, S.Pd.";
+
+function buildDocumentPackage(tanggal, rows) {
+  // Mengembalikan { documentXml, docRelsXml, mediaFiles: [{name, contentBytes}] }
+  const mediaFiles = [];
+  const docRelEntries = [];
+  let rId = 1;
+
   const borders = `
     <w:tblBorders>
       <w:top w:val="single" w:sz="4" w:color="000000"/>
@@ -570,16 +728,41 @@ function buildDocumentXml(tanggal, rows) {
       <w:insideV w:val="single" w:sz="4" w:color="000000"/>
     </w:tblBorders>`;
 
-  const headerRow = `<w:tr>${docxCell("No", { bold: true, width: 900, center: true })}${docxCell("Nama Lengkap", { bold: true, width: 7500 })}</w:tr>`;
+  const W_NO = 700, W_NAMA = 4200, W_KELAS = 1200, W_TTD = 2300;
 
-  const bodyRows = rows.length === 0
-    ? `<w:tr>${docxCell("", { width: 900, center: true })}${docxCell("(Tidak ada data kehadiran)", { width: 7500 })}</w:tr>`
-    : rows.map((r, idx) => `<w:tr>${docxCell(String(idx + 1), { width: 900, center: true })}${docxCell(r.nama, { width: 7500 })}</w:tr>`).join("");
+  const headerRow = `<w:tr>${
+    docxCell("No", { bold: true, width: W_NO, center: true })
+  }${
+    docxCell("Nama Lengkap", { bold: true, width: W_NAMA })
+  }${
+    docxCell("Kelas", { bold: true, width: W_KELAS, center: true })
+  }${
+    docxCell("Tanda Tangan", { bold: true, width: W_TTD, center: true })
+  }</w:tr>`;
+
+  let bodyRows;
+  if (rows.length === 0) {
+    bodyRows = `<w:tr>${docxCell("", { width: W_NO, center: true })}${docxCell("(Tidak ada data kehadiran)", { width: W_NAMA })}${docxCell("", { width: W_KELAS })}${docxCell("", { width: W_TTD })}</w:tr>`;
+  } else {
+    bodyRows = rows.map((r, idx) => {
+      const kelas = `${r.tingkat || ""}-${r.rombel || ""}`;
+      let ttdCell;
+      if (r.ttd) {
+        const thisRId = rId++;
+        mediaFiles.push({ name: `word/media/image${thisRId}.png`, contentBytes: base64ToBytes(r.ttd) });
+        docRelEntries.push(`<Relationship Id="rId${thisRId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image${thisRId}.png"/>`);
+        ttdCell = docxCellImage(thisRId, W_TTD);
+      } else {
+        ttdCell = docxCell("-", { width: W_TTD, center: true });
+      }
+      return `<w:tr>${docxCell(String(idx + 1), { width: W_NO, center: true })}${docxCell(r.nama, { width: W_NAMA })}${docxCell(kelas, { width: W_KELAS, center: true })}${ttdCell}</w:tr>`;
+    }).join("");
+  }
 
   const table = `
     <w:tbl>
-      <w:tblPr>${borders}<w:tblW w:w="8400" w:type="dxa"/></w:tblPr>
-      <w:tblGrid><w:gridCol w:w="900"/><w:gridCol w:w="7500"/></w:tblGrid>
+      <w:tblPr>${borders}<w:tblW w:w="${W_NO + W_NAMA + W_KELAS + W_TTD}" w:type="dxa"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="${W_NO}"/><w:gridCol w:w="${W_NAMA}"/><w:gridCol w:w="${W_KELAS}"/><w:gridCol w:w="${W_TTD}"/></w:tblGrid>
       ${headerRow}
       ${bodyRows}
     </w:tbl>`;
@@ -591,28 +774,64 @@ function buildDocumentXml(tanggal, rows) {
     docxParagraph("Jl. Jendral Ahmad Yani No.07 Telp./Fax (0334) 881747. Lumajang 67316", { size: 18 }),
     docxParagraph("Website : www.sman1lmj.sch.id   e-mail : smanegerisatulumajang@gmail.com", { size: 18 }),
     `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr></w:pPr></w:p>`,
-    docxParagraph("DAFTAR HADIR MEDIA CENTER", { bold: true, size: 26 }),
-    `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t xml:space="preserve">Hari/Tanggal : ${xmlEscape(hariIndoJS(tanggal) + ", " + tanggalLabelJS(tanggal))}</w:t></w:r></w:p>`,
+    docxParagraph("DAFTAR HADIR EKSTRAKURIKULER", { bold: true, size: 26 }),
+    `<w:p/>`,
+    docxInfoLine("Nama Ekskul", "Media Center X Kepenulisan"),
+    docxInfoLine("Hari/Tanggal", `${hariIndoJS(tanggal)}, ${tanggalLabelJS(tanggal)}`),
+    docxInfoLine("Pembina", PEMBINA_NAME),
+    docxInfoLineBlank("Materi/Kegiatan"), // baris kosong bergaris untuk ditulis tangan pakai pensil
     `<w:p/>`
   ].join("");
 
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  const footer = [
+    `<w:p/>`,
+    `<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>Mengetahui,</w:t></w:r></w:p>`,
+    `<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>Pembina,</w:t></w:r></w:p>`,
+    `<w:p/><w:p/><w:p/>`,
+    `<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:b/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">${xmlEscape(PEMBINA_NAME)}</w:t></w:r></w:p>`
+  ].join("");
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
     ${header}
     ${table}
+    ${footer}
     <w:sectPr>
       <w:pgSz w:w="11906" w:h="16838"/>
       <w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/>
     </w:sectPr>
   </w:body>
 </w:document>`;
+
+  const docRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${docRelEntries.join("\n  ")}
+</Relationships>`;
+
+  return { documentXml, docRelsXml, mediaFiles, hasImages: mediaFiles.length > 0 };
+}
+
+function docxInfoLine(label, value) {
+  return `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${xmlEscape(label)}</w:t></w:r><w:r><w:t xml:space="preserve"> : ${xmlEscape(value)}</w:t></w:r></w:p>`;
+}
+
+function docxInfoLineBlank(label) {
+  // Label diikuti garis panjang (karakter underscore) untuk diisi manual pakai pensil setelah dicetak.
+  // Pakai karakter '_' literal (bukan spasi+underline) supaya PASTI tampak di semua penampil & saat dicetak.
+  const blank = "_".repeat(48);
+  return `<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">${xmlEscape(label)}</w:t></w:r><w:r><w:t xml:space="preserve"> : ${blank}</w:t></w:r></w:p>`;
 }
 
 const CONTENT_TYPES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
 </Types>`;
 
@@ -629,11 +848,18 @@ async function exportDocx(tanggal) {
   }
 
   try {
+    const pkg = buildDocumentPackage(tanggal, rows);
+
     const files = [
       { name: "[Content_Types].xml", content: CONTENT_TYPES_XML },
       { name: "_rels/.rels", content: RELS_XML },
-      { name: "word/document.xml", content: buildDocumentXml(tanggal, rows) }
+      { name: "word/document.xml", content: pkg.documentXml }
     ];
+    if (pkg.hasImages) {
+      files.push({ name: "word/_rels/document.xml.rels", content: pkg.docRelsXml });
+      files.push(...pkg.mediaFiles);
+    }
+
     const zipBytes = makeZip(files);
     const blob = new Blob([zipBytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 
