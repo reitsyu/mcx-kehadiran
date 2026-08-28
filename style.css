@@ -261,6 +261,21 @@ footer.foot{
 }
 .center-screen .card{width:100%;max-width:420px;}
 
+.ttd-pad-wrap{
+  border:2px dashed var(--border);
+  border-radius:var(--radius);
+  background:#fff;
+  touch-action:none;
+  overflow:hidden;
+}
+#ttd-canvas{
+  display:block;
+  width:100%;
+  height:220px;
+  touch-action:none;
+  cursor:crosshair;
+}
+
 @media (max-width:480px){
   .stat-row{flex-wrap:wrap;}
   .stat-box{min-width:45%;}
