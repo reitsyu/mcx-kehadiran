@@ -221,10 +221,25 @@ async function loadDashboard() {
     if (currentRole === "admin" && res.history) {
       renderRiwayat(res.history);
     }
+    checkBackendVersionOnce();
   } catch (err) {
     if (/password|auth|login/i.test(err.message)) {
       logout();
     }
+  }
+}
+
+// Cek sekali saja per sesi: pastikan Apps Script yang live sudah menjalankan
+// kode backend terbaru (bukan versi lama yang belum di-redeploy).
+let backendVersionChecked = false;
+async function checkBackendVersionOnce() {
+  if (backendVersionChecked) return;
+  backendVersionChecked = true;
+  try {
+    const res = await callApi("ping", {});
+    console.log("[Backend] Versi aktif:", res.version, "| Waktu server:", res.serverTime);
+  } catch (err) {
+    console.warn("[Backend] Gagal cek versi (mungkin backend lama belum punya action 'ping'):", err.message);
   }
 }
 
@@ -389,10 +404,114 @@ async function savePetugasPassword() {
   }
 }
 
-/* ---------------- EXPORT DOCX (dibangun manual sebagai ZIP+XML, pakai JSZip) ---------------- */
+/* ---------------- EXPORT DOCX (dibangun manual sebagai ZIP+XML, tanpa library eksternal) ---------------- */
 /* File .docx sebenarnya adalah file ZIP berisi beberapa file XML.
-   Pendekatan ini menghindari ketergantungan pada library "docx" pihak ketiga
-   yang CDN/bundle-nya sering berubah-ubah dan gampang gagal dimuat. */
+   ZIP-nya dibangun manual di sini (metode STORE, tanpa kompresi) supaya
+   TIDAK bergantung pada CDN pihak ketiga sama sekali — menghindari kegagalan
+   akibat library eksternal gagal dimuat. */
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function strToBytes(str) {
+  return new TextEncoder().encode(str);
+}
+
+function makeZip(files) {
+  // files: [{ name: string, content: string }]
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  const time = 0, date = 0x21; // tanggal dummy 1980-01-01, tidak berpengaruh ke isi dokumen
+
+  files.forEach(f => {
+    const nameBytes = strToBytes(f.name);
+    const contentBytes = strToBytes(f.content);
+    const crc = crc32(contentBytes);
+    const size = contentBytes.length;
+
+    const localHeader = new ArrayBuffer(30);
+    const lv = new DataView(localHeader);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0, true);
+    lv.setUint16(8, 0, true);
+    lv.setUint16(10, time, true);
+    lv.setUint16(12, date, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, size, true);
+    lv.setUint32(22, size, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);
+
+    localParts.push(new Uint8Array(localHeader));
+    localParts.push(nameBytes);
+    localParts.push(contentBytes);
+
+    const centralHeader = new ArrayBuffer(46);
+    const cv = new DataView(centralHeader);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, time, true);
+    cv.setUint16(14, date, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, size, true);
+    cv.setUint32(24, size, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(30, 0, true);
+    cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true);
+    cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true);
+    cv.setUint32(42, offset, true);
+
+    centralParts.push(new Uint8Array(centralHeader));
+    centralParts.push(nameBytes);
+
+    offset += localHeader.byteLength + nameBytes.length + contentBytes.length;
+  });
+
+  const centralSize = centralParts.reduce((a, b) => a + b.length, 0);
+  const centralOffset = offset;
+
+  const endRecord = new ArrayBuffer(22);
+  const ev = new DataView(endRecord);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, centralOffset, true);
+  ev.setUint16(20, 0, true);
+
+  const allParts = [...localParts, ...centralParts, new Uint8Array(endRecord)];
+  const totalSize = allParts.reduce((a, b) => a + b.length, 0);
+  const result = new Uint8Array(totalSize);
+  let pos = 0;
+  allParts.forEach(p => { result.set(p, pos); pos += p.length; });
+  return result;
+}
 
 const HARI_ID = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 const BULAN_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
@@ -508,21 +627,15 @@ async function exportDocx(tanggal) {
     alert("Data pertemuan tidak ditemukan. Coba muat ulang dashboard.");
     return;
   }
-  if (typeof JSZip === "undefined") {
-    alert("Library ZIP gagal dimuat. Periksa koneksi internet lalu coba lagi.");
-    return;
-  }
 
   try {
-    const zip = new JSZip();
-    zip.file("[Content_Types].xml", CONTENT_TYPES_XML);
-    zip.folder("_rels").file(".rels", RELS_XML);
-    zip.folder("word").file("document.xml", buildDocumentXml(tanggal, rows));
-
-    const blob = await zip.generateAsync({
-      type: "blob",
-      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    });
+    const files = [
+      { name: "[Content_Types].xml", content: CONTENT_TYPES_XML },
+      { name: "_rels/.rels", content: RELS_XML },
+      { name: "word/document.xml", content: buildDocumentXml(tanggal, rows) }
+    ];
+    const zipBytes = makeZip(files);
+    const blob = new Blob([zipBytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
