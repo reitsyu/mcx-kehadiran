@@ -73,7 +73,30 @@
 
       <div id="anggota-error" class="error-box hidden"></div>
 
-      <button class="btn-primary btn-block" style="margin-top:16px" id="btn-submit-hadir">HADIR</button>
+      <button class="btn-primary btn-block" style="margin-top:16px" id="btn-lanjut-ttd">Lanjut ke Tanda Tangan</button>
+    </div>
+  </div>
+
+  <!-- ================= ANGGOTA: TANDA TANGAN ================= -->
+  <div id="screen-anggota-ttd" class="hidden">
+    <div class="card">
+      <h2>Tanda Tangan</h2>
+      <p class="helper-text">Gambar tanda tanganmu di kotak di bawah ini menggunakan jari.</p>
+
+      <div class="ttd-pad-wrap">
+        <canvas id="ttd-canvas"></canvas>
+      </div>
+
+      <div id="ttd-error" class="error-box hidden"></div>
+
+      <div class="btn-row">
+        <button class="btn-outline" id="btn-ttd-undo">Undo</button>
+        <button class="btn-outline" id="btn-ttd-clear">Hapus Semua</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn-outline" id="btn-ttd-kembali">Kembali</button>
+        <button class="btn-primary" id="btn-ttd-confirm">Konfirmasi Kehadiran</button>
+      </div>
     </div>
   </div>
 
