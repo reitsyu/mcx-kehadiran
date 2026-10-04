@@ -46,7 +46,7 @@
     </div>
   </div>
 
-  <!-- ================= ANGGOTA: FORM ================= -->
+  <!-- ================= ANGGOTA: FORM HADIR ================= -->
   <div id="screen-anggota-form" class="hidden">
     <div class="card">
       <h2>Presensi Kehadiran</h2>
@@ -77,10 +77,44 @@
     </div>
   </div>
 
-  <!-- ================= ANGGOTA: TANDA TANGAN ================= -->
+  <!-- ================= ANGGOTA: FORM IZIN / TIDAK HADIR ================= -->
+  <div id="screen-izin-form" class="hidden">
+    <div class="card">
+      <h2>Form Tidak Hadir / Izin</h2>
+      <div class="notice">WAJIB MASUKKAN NAMA LENGKAP, TANPA SINGKATAN.<br>Contoh: RADEN PRATAMA — bukan RADEN P. atau nama panggilan.</div>
+
+      <label for="iz-nama">Nama Lengkap</label>
+      <input type="text" id="iz-nama" placeholder="Nama lengkap sesuai identitas">
+
+      <label for="iz-tingkat">Tingkat</label>
+      <select id="iz-tingkat">
+        <option value="">Pilih tingkat</option>
+        <option value="X">X</option>
+        <option value="XI">XI</option>
+        <option value="XII">XII</option>
+      </select>
+
+      <label for="iz-rombel">Rombel</label>
+      <select id="iz-rombel">
+        <option value="">Pilih rombel</option>
+        <option>A</option><option>B</option><option>C</option><option>D</option>
+        <option>E</option><option>F</option><option>G</option><option>H</option>
+        <option>I</option><option>J</option>
+      </select>
+
+      <label for="iz-alasan">Alasan Tidak Hadir</label>
+      <textarea id="iz-alasan" rows="3" placeholder="Contoh: Sakit, ada acara keluarga, dll."></textarea>
+
+      <div id="izin-error" class="error-box hidden"></div>
+
+      <button class="btn-primary btn-block" style="margin-top:16px" id="btn-izin-lanjut-ttd">Lanjut ke Tanda Tangan</button>
+    </div>
+  </div>
+
+  <!-- ================= ANGGOTA: TANDA TANGAN (dipakai bersama Hadir & Izin) ================= -->
   <div id="screen-anggota-ttd" class="hidden">
     <div class="card">
-      <h2>Tanda Tangan</h2>
+      <h2 id="ttd-title">Tanda Tangan</h2>
       <p class="helper-text">Gambar tanda tanganmu di kotak di bawah ini menggunakan jari.</p>
 
       <div class="ttd-pad-wrap">
@@ -100,7 +134,7 @@
     </div>
   </div>
 
-  <!-- ================= ANGGOTA: SUCCESS ================= -->
+  <!-- ================= ANGGOTA: SUCCESS (dipakai bersama) ================= -->
   <div id="screen-anggota-success" class="hidden center-screen">
     <div class="card">
       <h2>Berhasil</h2>
@@ -109,7 +143,7 @@
     </div>
   </div>
 
-  <!-- ================= ANGGOTA: BLOCKED / INVALID SESSION ================= -->
+  <!-- ================= ANGGOTA: BLOCKED / INVALID SESSION (dipakai bersama) ================= -->
   <div id="screen-anggota-blocked" class="hidden center-screen">
     <div class="card">
       <h2>Sesi Tidak Tersedia</h2>
@@ -124,56 +158,160 @@
       <button class="btn-outline btn-sm" id="btn-logout">Keluar</button>
     </div>
 
-    <!-- SESI -->
-    <div class="card">
-      <h2>Sesi Presensi Hari Ini</h2>
-      <div class="session-status">
-        <span>Status:</span>
-        <span class="status-badge status-closed" id="session-badge">TERTUTUP</span>
+    <div class="view-switcher">
+      <button class="view-tab active" id="tab-hadir">Presensi (Hadir)</button>
+      <button class="view-tab" id="tab-izin">Tidak Hadir (Izin)</button>
+    </div>
+
+    <!-- ============ VIEW: HADIR ============ -->
+    <div id="view-hadir">
+
+      <!-- SESI PRESENSI (QR) -->
+      <div class="card">
+        <h2>Sesi Presensi Hari Ini</h2>
+        <div class="session-status">
+          <span>Status:</span>
+          <span class="status-badge status-closed" id="session-badge">TERTUTUP</span>
+        </div>
+
+        <div id="qr-area" class="qr-box hidden">
+          <div id="qrcode"></div>
+          <div class="countdown" id="countdown-text">05:00</div>
+          <p class="helper-text">Anggota scan QR di atas untuk presensi</p>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn-primary" id="btn-open-session">BUKA SESI PRESENSI</button>
+          <button class="btn-danger hidden" id="btn-close-session">TUTUP SESI</button>
+        </div>
+        <p class="helper-text">Membuka sesi presensi juga otomatis mengaktifkan link Tidak Hadir/Izin untuk hari ini (lihat tab "Tidak Hadir").</p>
       </div>
 
-      <div id="qr-area" class="qr-box hidden">
-        <div id="qrcode"></div>
-        <div class="countdown" id="countdown-text">05:00</div>
-        <p class="helper-text">Anggota scan QR di atas untuk presensi</p>
+      <!-- STAT HADIR HARI INI -->
+      <div class="card">
+        <h2>Kehadiran Hari Ini</h2>
+        <div class="stat-row">
+          <div class="stat-box"><div class="num" id="stat-hadir">0</div><div class="lbl">Hadir</div></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn-outline" id="btn-export-today">Export DOCX Hari Ini</button>
+          <button class="btn-outline" id="btn-toggle-manual-hadir">+ Tambah Manual</button>
+        </div>
+
+        <div id="manual-hadir-form" class="manual-form hidden">
+          <label for="mh-nama">Nama Lengkap</label>
+          <input type="text" id="mh-nama" placeholder="Nama lengkap">
+          <label for="mh-tingkat">Tingkat</label>
+          <select id="mh-tingkat">
+            <option value="">Pilih tingkat</option>
+            <option value="X">X</option><option value="XI">XI</option><option value="XII">XII</option>
+          </select>
+          <label for="mh-rombel">Rombel</label>
+          <select id="mh-rombel">
+            <option value="">Pilih rombel</option>
+            <option>A</option><option>B</option><option>C</option><option>D</option>
+            <option>E</option><option>F</option><option>G</option><option>H</option>
+            <option>I</option><option>J</option>
+          </select>
+          <div id="manual-hadir-error" class="error-box hidden"></div>
+          <div class="btn-row">
+            <button class="btn-outline" id="btn-cancel-manual-hadir">Batal</button>
+            <button class="btn-primary" id="btn-submit-manual-hadir">Simpan</button>
+          </div>
+        </div>
+
+        <div style="overflow-x:auto;margin-top:10px;">
+          <table class="attendance-table" id="today-table">
+            <thead><tr><th>Waktu</th><th>Nama</th><th>Kelas</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
 
-      <div class="btn-row">
-        <button class="btn-primary" id="btn-open-session">BUKA SESI PRESENSI</button>
-        <button class="btn-danger hidden" id="btn-close-session">TUTUP SESI</button>
+      <!-- RIWAYAT HADIR (ADMIN ONLY) -->
+      <div class="card hidden" id="card-riwayat">
+        <h2>Riwayat Pertemuan</h2>
+        <div id="riwayat-container"></div>
       </div>
     </div>
 
-    <!-- STAT HARI INI -->
-    <div class="card">
-      <h2>Kehadiran Hari Ini</h2>
-      <div class="stat-row">
-        <div class="stat-box"><div class="num" id="stat-hadir">0</div><div class="lbl">Hadir</div></div>
+    <!-- ============ VIEW: TIDAK HADIR / IZIN ============ -->
+    <div id="view-izin" class="hidden">
+
+      <!-- SESI IZIN (LINK) -->
+      <div class="card">
+        <h2>Link Tidak Hadir / Izin Hari Ini</h2>
+        <div class="session-status">
+          <span>Status:</span>
+          <span class="status-badge status-closed" id="izin-session-badge">TERTUTUP</span>
+        </div>
+        <p class="helper-text" id="izin-session-info">Buka sesi presensi dulu di tab "Presensi (Hadir)" untuk mengaktifkan link ini.</p>
+        <div id="izin-link-area" class="hidden">
+          <input type="text" id="izin-link-text" readonly style="margin-bottom:10px;">
+          <div class="btn-row">
+            <button class="btn-primary" id="btn-copy-izin-link">Salin Link</button>
+          </div>
+          <p class="helper-text">Bagikan link ini ke grup untuk anggota yang tidak hadir. Link otomatis tidak berlaku lagi besok.</p>
+        </div>
       </div>
-      <div class="btn-row">
-        <button class="btn-outline" id="btn-export-today">Export DOCX Hari Ini</button>
+
+      <!-- STAT IZIN HARI INI -->
+      <div class="card">
+        <h2>Tidak Hadir / Izin Hari Ini</h2>
+        <div class="stat-row">
+          <div class="stat-box"><div class="num" id="stat-izin">0</div><div class="lbl">Izin</div></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn-outline" id="btn-export-today-izin">Export DOCX Hari Ini</button>
+          <button class="btn-outline" id="btn-toggle-manual-izin">+ Tambah Manual</button>
+        </div>
+
+        <div id="manual-izin-form" class="manual-form hidden">
+          <label for="mi-nama">Nama Lengkap</label>
+          <input type="text" id="mi-nama" placeholder="Nama lengkap">
+          <label for="mi-tingkat">Tingkat</label>
+          <select id="mi-tingkat">
+            <option value="">Pilih tingkat</option>
+            <option value="X">X</option><option value="XI">XI</option><option value="XII">XII</option>
+          </select>
+          <label for="mi-rombel">Rombel</label>
+          <select id="mi-rombel">
+            <option value="">Pilih rombel</option>
+            <option>A</option><option>B</option><option>C</option><option>D</option>
+            <option>E</option><option>F</option><option>G</option><option>H</option>
+            <option>I</option><option>J</option>
+          </select>
+          <label for="mi-alasan">Alasan</label>
+          <textarea id="mi-alasan" rows="2" placeholder="Alasan tidak hadir"></textarea>
+          <div id="manual-izin-error" class="error-box hidden"></div>
+          <div class="btn-row">
+            <button class="btn-outline" id="btn-cancel-manual-izin">Batal</button>
+            <button class="btn-primary" id="btn-submit-manual-izin">Simpan</button>
+          </div>
+        </div>
+
+        <div style="overflow-x:auto;margin-top:10px;">
+          <table class="attendance-table" id="today-izin-table">
+            <thead><tr><th>Waktu</th><th>Nama</th><th>Kelas</th><th>Alasan</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
-      <div style="overflow-x:auto;margin-top:10px;">
-        <table class="attendance-table" id="today-table">
-          <thead><tr><th>Waktu</th><th>Nama</th><th>Kelas</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
+
+      <!-- RIWAYAT IZIN (ADMIN ONLY) -->
+      <div class="card hidden" id="card-riwayat-izin">
+        <h2>Riwayat Izin</h2>
+        <div id="riwayat-izin-container"></div>
       </div>
     </div>
 
-    <!-- KELOLA PETUGAS (ADMIN ONLY) -->
+    <!-- KELOLA PETUGAS (ADMIN ONLY, berlaku untuk kedua view) -->
     <div class="card hidden" id="card-kelola-petugas">
       <h2>Kelola Akses Petugas</h2>
       <label for="new-petugas-pass">Password Petugas Baru</label>
       <input type="text" id="new-petugas-pass" placeholder="Password baru untuk Petugas">
       <div id="petugas-pass-msg"></div>
       <button class="btn-primary" style="margin-top:10px" id="btn-save-petugas-pass">Simpan</button>
-    </div>
-
-    <!-- RIWAYAT (ADMIN ONLY) -->
-    <div class="card hidden" id="card-riwayat">
-      <h2>Riwayat Pertemuan</h2>
-      <div id="riwayat-container"></div>
     </div>
   </div>
 
