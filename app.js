@@ -50,10 +50,16 @@ window.addEventListener("DOMContentLoaded", init);
 function init() {
   const params = new URLSearchParams(location.search);
   const sessionParam = params.get("session");
+  const izinParam = params.get("izin");
 
   if (sessionParam) {
     currentSessionId = sessionParam;
-    initAnggotaFlow(sessionParam);
+    initAnggotaFlow(sessionParam, "HADIR");
+    return;
+  }
+  if (izinParam) {
+    currentSessionId = izinParam;
+    initAnggotaFlow(izinParam, "IZIN");
     return;
   }
 
@@ -123,19 +129,29 @@ function logout() {
 /* ======================================================
    ANGGOTA FLOW
    ====================================================== */
-async function initAnggotaFlow(sessionId) {
+let anggotaMode = "HADIR"; // "HADIR" | "IZIN" — ditentukan dari parameter URL (?session= atau ?izin=)
+
+async function initAnggotaFlow(sessionId, mode) {
+  anggotaMode = mode;
   show("screen-loading");
   try {
     const res = await callApi("getSessionStatus", { sessionId });
     if (res.status !== "OPEN") {
-      showBlocked(res.status === "EXPIRED" ? "Sesi presensi ini sudah berakhir (lebih dari 5 menit)." : "Sesi presensi ini sudah ditutup.");
+      const label = mode === "IZIN" ? "Link Tidak Hadir/Izin" : "Sesi presensi";
+      showBlocked(res.status === "EXPIRED" ? `${label} ini sudah berakhir.` : `${label} ini sudah ditutup.`);
       return;
     }
-    show("screen-anggota-form");
-    bindAnggotaForm(sessionId);
+    if (mode === "IZIN") {
+      show("screen-izin-form");
+      bindIzinForm(sessionId);
+    } else {
+      show("screen-anggota-form");
+      bindAnggotaForm(sessionId);
+    }
     setupTtdPad();
   } catch (err) {
-    showBlocked("Sesi presensi tidak ditemukan atau tidak valid.");
+    const label = mode === "IZIN" ? "Link Tidak Hadir/Izin" : "Sesi presensi";
+    showBlocked(`${label} tidak ditemukan atau tidak valid.`);
   }
 }
 
@@ -144,7 +160,7 @@ function showBlocked(msg) {
   show("screen-anggota-blocked");
 }
 
-/* ---------------- STEP 1: FORM DATA ---------------- */
+/* ---------------- STEP 1: FORM DATA (HADIR) ---------------- */
 let pendingAnggota = null; // { nama, tingkat, rombel }
 
 function bindAnggotaForm(sessionId) {
@@ -166,36 +182,92 @@ function bindAnggotaForm(sessionId) {
     if (!rombel) return anggotaError("Pilih rombel.");
 
     pendingAnggota = { nama, tingkat, rombel };
+    $("ttd-title").textContent = "Tanda Tangan";
+    $("btn-ttd-confirm").textContent = "Konfirmasi Kehadiran";
+    $("btn-ttd-kembali").onclick = () => show("screen-anggota-form");
     show("screen-anggota-ttd");
   };
 
-  $("btn-ttd-kembali").onclick = () => show("screen-anggota-form");
+  bindTtdConfirm(sessionId, "HADIR");
+}
+
+/* ---------------- STEP 1: FORM DATA (IZIN) ---------------- */
+let pendingIzin = null; // { nama, tingkat, rombel, alasan }
+
+function bindIzinForm(sessionId) {
+  $("iz-nama").addEventListener("input", () => {
+    const cursor = $("iz-nama").selectionStart;
+    $("iz-nama").value = $("iz-nama").value.toUpperCase();
+    $("iz-nama").setSelectionRange(cursor, cursor);
+  });
+
+  $("btn-izin-lanjut-ttd").onclick = () => {
+    const nama = $("iz-nama").value.trim().toUpperCase();
+    const tingkat = $("iz-tingkat").value;
+    const rombel = $("iz-rombel").value;
+    const alasan = $("iz-alasan").value.trim();
+    $("izin-error").classList.add("hidden");
+
+    if (!nama) return izinError("Nama lengkap wajib diisi.");
+    if (nama.length < 3) return izinError("Nama terlalu pendek. Masukkan nama lengkap.");
+    if (!tingkat) return izinError("Pilih tingkat.");
+    if (!rombel) return izinError("Pilih rombel.");
+    if (!alasan || alasan.length < 3) return izinError("Alasan wajib diisi.");
+
+    pendingIzin = { nama, tingkat, rombel, alasan };
+    $("ttd-title").textContent = "Tanda Tangan";
+    $("btn-ttd-confirm").textContent = "Konfirmasi Tidak Hadir";
+    $("btn-ttd-kembali").onclick = () => show("screen-izin-form");
+    show("screen-anggota-ttd");
+  };
+
+  bindTtdConfirm(sessionId, "IZIN");
+}
+
+/* ---------------- STEP 2: TANDA TANGAN (dipakai bersama) ---------------- */
+function bindTtdConfirm(sessionId, mode) {
   $("btn-ttd-undo").onclick = () => ttdUndo();
   $("btn-ttd-clear").onclick = () => ttdClear();
 
   $("btn-ttd-confirm").onclick = async () => {
     $("ttd-error").classList.add("hidden");
     if (ttdIsEmpty()) return ttdError("Tanda tangan belum diisi.");
-    if (!pendingAnggota) { show("screen-anggota-form"); return; }
 
-    $("btn-ttd-confirm").disabled = true;
-    $("btn-ttd-confirm").textContent = "Memproses...";
+    const btn = $("btn-ttd-confirm");
+    btn.disabled = true;
+    btn.textContent = "Memproses...";
 
     try {
-      const res = await callApi("submitAttendance", {
-        sessionId,
-        nama: pendingAnggota.nama,
-        tingkat: pendingAnggota.tingkat,
-        rombel: pendingAnggota.rombel,
-        deviceId: getDeviceId(),
-        ttd: ttdToBase64Png()
-      });
-      $("success-msg").textContent = `Kehadiran atas nama ${res.nama} (${res.tingkat}-${res.rombel}) berhasil dicatat pukul ${res.waktu}.`;
+      let res;
+      if (mode === "IZIN") {
+        if (!pendingIzin) { show("screen-izin-form"); return; }
+        res = await callApi("submitIzin", {
+          sessionId,
+          nama: pendingIzin.nama,
+          tingkat: pendingIzin.tingkat,
+          rombel: pendingIzin.rombel,
+          alasan: pendingIzin.alasan,
+          deviceId: getDeviceId(),
+          ttd: ttdToBase64Png()
+        });
+        $("success-msg").textContent = `Tidak hadir atas nama ${res.nama} (${res.tingkat}-${res.rombel}) berhasil dicatat pukul ${res.waktu}.`;
+      } else {
+        if (!pendingAnggota) { show("screen-anggota-form"); return; }
+        res = await callApi("submitAttendance", {
+          sessionId,
+          nama: pendingAnggota.nama,
+          tingkat: pendingAnggota.tingkat,
+          rombel: pendingAnggota.rombel,
+          deviceId: getDeviceId(),
+          ttd: ttdToBase64Png()
+        });
+        $("success-msg").textContent = `Kehadiran atas nama ${res.nama} (${res.tingkat}-${res.rombel}) berhasil dicatat pukul ${res.waktu}.`;
+      }
       show("screen-anggota-success");
     } catch (err) {
       ttdError(err.message);
-      $("btn-ttd-confirm").disabled = false;
-      $("btn-ttd-confirm").textContent = "Konfirmasi Kehadiran";
+      btn.disabled = false;
+      btn.textContent = mode === "IZIN" ? "Konfirmasi Tidak Hadir" : "Konfirmasi Kehadiran";
     }
   };
 }
@@ -203,6 +275,10 @@ function bindAnggotaForm(sessionId) {
 function anggotaError(msg) {
   $("anggota-error").textContent = msg;
   $("anggota-error").classList.remove("hidden");
+}
+function izinError(msg) {
+  $("izin-error").textContent = msg;
+  $("izin-error").classList.remove("hidden");
 }
 function ttdError(msg) {
   $("ttd-error").textContent = msg;
@@ -350,17 +426,32 @@ function enterDashboard() {
   $("dash-role-tag").textContent = currentRole === "admin" ? "ADMIN" : "PETUGAS";
   $("card-kelola-petugas").classList.toggle("hidden", currentRole !== "admin");
   $("card-riwayat").classList.toggle("hidden", currentRole !== "admin");
+  $("card-riwayat-izin").classList.toggle("hidden", currentRole !== "admin");
 
   $("btn-logout").onclick = logout;
   $("btn-open-session").onclick = openSession;
   $("btn-close-session").onclick = closeSession;
-  $("btn-export-today").onclick = () => exportDocx(todayLabelISO());
+  $("btn-export-today").onclick = () => exportDocx(todayLabelISO(), "HADIR");
+  $("btn-export-today-izin").onclick = () => exportDocx(todayLabelISO(), "IZIN");
   if (currentRole === "admin") {
     $("btn-save-petugas-pass").onclick = savePetugasPassword;
   }
 
+  $("tab-hadir").onclick = () => switchView("hadir");
+  $("tab-izin").onclick = () => switchView("izin");
+
+  bindManualForms();
+  $("btn-copy-izin-link").onclick = copyIzinLink;
+
   loadDashboard();
   dashboardPollTimer = setInterval(loadDashboard, 8000);
+}
+
+function switchView(view) {
+  $("view-hadir").classList.toggle("hidden", view !== "hadir");
+  $("view-izin").classList.toggle("hidden", view !== "izin");
+  $("tab-hadir").classList.toggle("active", view === "hadir");
+  $("tab-izin").classList.toggle("active", view === "izin");
 }
 
 async function loadDashboard() {
@@ -371,8 +462,15 @@ async function loadDashboard() {
     renderToday(res.todayAttendance || []);
     $("stat-hadir").textContent = (res.todayAttendance || []).length;
 
+    renderIzinSession(res.izinSession);
+    renderTodayIzin(res.todayIzin || [], res.izinNameCounts || {});
+    $("stat-izin").textContent = (res.todayIzin || []).length;
+
     if (currentRole === "admin" && res.history) {
       renderRiwayat(res.history);
+    }
+    if (currentRole === "admin" && res.izinHistory) {
+      renderRiwayatIzin(res.izinHistory, res.izinNameCounts || {});
     }
     checkBackendVersionOnce();
   } catch (err) {
@@ -519,6 +617,207 @@ function renderRiwayat(history) {
   container.querySelectorAll("[data-export]").forEach(btn => {
     btn.onclick = () => exportDocx(btn.dataset.export);
   });
+}
+
+/* ---------------- IZIN: SESI (LINK, bukan QR) ---------------- */
+let currentIzinSessionId = null;
+
+function renderIzinSession(izinSession) {
+  if (izinSession && izinSession.status === "OPEN") {
+    currentIzinSessionId = izinSession.sessionId;
+    $("izin-session-badge").textContent = "TERBUKA";
+    $("izin-session-badge").className = "status-badge status-open";
+    $("izin-session-info").textContent = `Terbuka sampai akhir hari ini (${formatJamFromISO(izinSession.expireTime)}).`;
+    $("izin-link-area").classList.remove("hidden");
+    const link = `${location.origin}${location.pathname}?izin=${izinSession.sessionId}`;
+    $("izin-link-text").value = link;
+  } else {
+    currentIzinSessionId = null;
+    $("izin-session-badge").textContent = "TERTUTUP";
+    $("izin-session-badge").className = "status-badge status-closed";
+    $("izin-session-info").textContent = 'Buka sesi presensi dulu di tab "Presensi (Hadir)" untuk mengaktifkan link ini.';
+    $("izin-link-area").classList.add("hidden");
+  }
+}
+
+function formatJamFromISO(iso) {
+  try {
+    const d = new Date(iso);
+    return Utilities_formatJam(d);
+  } catch (e) {
+    return "23:59";
+  }
+}
+function Utilities_formatJam(d) {
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+function copyIzinLink() {
+  const input = $("izin-link-text");
+  input.select();
+  input.setSelectionRange(0, 99999);
+  try {
+    navigator.clipboard.writeText(input.value);
+    const btn = $("btn-copy-izin-link");
+    const original = btn.textContent;
+    btn.textContent = "Tersalin!";
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  } catch (e) {
+    document.execCommand("copy");
+  }
+}
+
+/* ---------------- IZIN: TABEL HARI INI ---------------- */
+function renderTodayIzin(list, nameCounts) {
+  const tbody = $("today-izin-table").querySelector("tbody");
+  tbody.innerHTML = "";
+  list.forEach(row => {
+    const tr = document.createElement("tr");
+    const count = nameCounts[row.nama] || 1;
+    const badge = count > 1 ? `<span class="izin-badge">Izin ke-${count}</span>` : "";
+    tr.innerHTML = `
+      <td>${row.waktu}</td>
+      <td>${row.nama}${badge}</td>
+      <td>${row.tingkat}-${row.rombel}</td>
+      <td>${row.alasan || ""}</td>
+      <td>${currentRole === "admin" ? rowActionsHtmlIzin(row.id) : ""}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  if (currentRole === "admin") bindRowActionsIzin();
+}
+
+function rowActionsHtmlIzin(id) {
+  return `<div class="row-actions">
+    <button class="btn-outline btn-sm" data-edit-izin="${id}">Edit</button>
+    <button class="btn-danger btn-sm" data-del-izin="${id}">Hapus</button>
+  </div>`;
+}
+
+function bindRowActionsIzin() {
+  document.querySelectorAll("[data-edit-izin]").forEach(btn => {
+    btn.onclick = () => editIzin(btn.dataset.editIzin);
+  });
+  document.querySelectorAll("[data-del-izin]").forEach(btn => {
+    btn.onclick = () => deleteIzin(btn.dataset.delIzin);
+  });
+}
+
+async function editIzin(id) {
+  const nama = prompt("Nama lengkap baru:");
+  if (nama === null) return;
+  const tingkat = prompt("Tingkat baru (X/XI/XII):");
+  if (tingkat === null) return;
+  const rombel = prompt("Rombel baru (A-J):");
+  if (rombel === null) return;
+  const alasan = prompt("Alasan baru:");
+  if (alasan === null) return;
+  try {
+    await callApi("editIzin", {
+      role: currentRole, password: currentPassword,
+      id, nama: nama.trim().toUpperCase(), tingkat: tingkat.trim().toUpperCase(), rombel: rombel.trim().toUpperCase(), alasan: alasan.trim()
+    });
+    loadDashboard();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function deleteIzin(id) {
+  if (!confirm("Hapus data izin ini?")) return;
+  try {
+    await callApi("deleteIzin", { role: currentRole, password: currentPassword, id });
+    loadDashboard();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function renderRiwayatIzin(history, nameCounts) {
+  const container = $("riwayat-izin-container");
+  container.innerHTML = "";
+  history.forEach(meeting => {
+    const block = document.createElement("div");
+    block.className = "meeting-block";
+    block.innerHTML = `
+      <div class="meeting-title">
+        <span>IZIN — ${meeting.tanggalLabel}</span>
+        <button class="btn-outline btn-sm" data-export-izin="${meeting.tanggal}">Export DOCX</button>
+      </div>
+      <table class="attendance-table">
+        <thead><tr><th>Waktu</th><th>Nama</th><th>Kelas</th><th>Alasan</th></tr></thead>
+        <tbody>
+          ${meeting.rows.map(r => {
+            const count = nameCounts[r.nama] || 1;
+            const badge = count > 1 ? `<span class="izin-badge">Izin ke-${count}</span>` : "";
+            return `<tr><td>${r.waktu}</td><td>${r.nama}${badge}</td><td>${r.tingkat}-${r.rombel}</td><td>${r.alasan || ""}</td></tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    `;
+    container.appendChild(block);
+  });
+  container.querySelectorAll("[data-export-izin]").forEach(btn => {
+    btn.onclick = () => exportDocx(btn.dataset.exportIzin, "IZIN");
+  });
+}
+
+/* ---------------- TAMBAH MANUAL (HADIR & IZIN) ---------------- */
+function bindManualForms() {
+  $("btn-toggle-manual-hadir").onclick = () => $("manual-hadir-form").classList.toggle("hidden");
+  $("btn-cancel-manual-hadir").onclick = () => {
+    $("manual-hadir-form").classList.add("hidden");
+    $("manual-hadir-error").classList.add("hidden");
+    $("mh-nama").value = ""; $("mh-tingkat").value = ""; $("mh-rombel").value = "";
+  };
+  $("btn-submit-manual-hadir").onclick = async () => {
+    const nama = $("mh-nama").value.trim().toUpperCase();
+    const tingkat = $("mh-tingkat").value;
+    const rombel = $("mh-rombel").value;
+    $("manual-hadir-error").classList.add("hidden");
+    if (!nama || nama.length < 3) return manualError("manual-hadir-error", "Nama lengkap wajib diisi dengan benar.");
+    if (!tingkat) return manualError("manual-hadir-error", "Pilih tingkat.");
+    if (!rombel) return manualError("manual-hadir-error", "Pilih rombel.");
+    try {
+      await callApi("addManualAttendance", { role: currentRole, password: currentPassword, nama, tingkat, rombel });
+      $("btn-cancel-manual-hadir").click();
+      loadDashboard();
+    } catch (err) {
+      manualError("manual-hadir-error", err.message);
+    }
+  };
+
+  $("btn-toggle-manual-izin").onclick = () => $("manual-izin-form").classList.toggle("hidden");
+  $("btn-cancel-manual-izin").onclick = () => {
+    $("manual-izin-form").classList.add("hidden");
+    $("manual-izin-error").classList.add("hidden");
+    $("mi-nama").value = ""; $("mi-tingkat").value = ""; $("mi-rombel").value = ""; $("mi-alasan").value = "";
+  };
+  $("btn-submit-manual-izin").onclick = async () => {
+    const nama = $("mi-nama").value.trim().toUpperCase();
+    const tingkat = $("mi-tingkat").value;
+    const rombel = $("mi-rombel").value;
+    const alasan = $("mi-alasan").value.trim();
+    $("manual-izin-error").classList.add("hidden");
+    if (!nama || nama.length < 3) return manualError("manual-izin-error", "Nama lengkap wajib diisi dengan benar.");
+    if (!tingkat) return manualError("manual-izin-error", "Pilih tingkat.");
+    if (!rombel) return manualError("manual-izin-error", "Pilih rombel.");
+    if (!alasan || alasan.length < 3) return manualError("manual-izin-error", "Alasan wajib diisi.");
+    try {
+      await callApi("addManualIzin", { role: currentRole, password: currentPassword, nama, tingkat, rombel, alasan });
+      $("btn-cancel-manual-izin").click();
+      loadDashboard();
+    } catch (err) {
+      manualError("manual-izin-error", err.message);
+    }
+  };
+}
+
+function manualError(elId, msg) {
+  $(elId).textContent = msg;
+  $(elId).classList.remove("hidden");
 }
 
 /* ---------------- SESSION CONTROL ---------------- */
@@ -681,9 +980,18 @@ function tanggalLabelJS(dateStr) {
   return `${d} ${BULAN_ID[m]} ${y}`;
 }
 
-function getRowsForDate(tanggal) {
+function getRowsForDate(tanggal, type) {
   if (!lastDashboard) return null;
-  if (tanggal === todayLabelISO()) return lastDashboard.todayAttendance || [];
+  const isToday = tanggal === todayLabelISO();
+  if (type === "IZIN") {
+    if (isToday) return lastDashboard.todayIzin || [];
+    if (lastDashboard.izinHistory) {
+      const meeting = lastDashboard.izinHistory.find(m => m.tanggal === tanggal);
+      if (meeting) return meeting.rows;
+    }
+    return null;
+  }
+  if (isToday) return lastDashboard.todayAttendance || [];
   if (lastDashboard.history) {
     const meeting = lastDashboard.history.find(m => m.tanggal === tanggal);
     if (meeting) return meeting.rows;
@@ -757,7 +1065,10 @@ const LOGO_MEDIACENTER_B64 = "iVBORw0KGgoAAAANSUhEUgAAARcAAAFeCAMAAACYWqtCAAAB/l
 
 const PEMBINA_NAME = "Eka Meilinda Fitriana, S.Pd.";
 
-function buildDocumentPackage(tanggal, rows) {
+function buildDocumentPackage(tanggal, rows, type) {
+  type = type || "HADIR";
+  const isIzin = type === "IZIN";
+
   // Mengembalikan { documentXml, docRelsXml, mediaFiles: [{name, contentBytes}] }
   const mediaFiles = [];
   const docRelEntries = [];
@@ -773,21 +1084,32 @@ function buildDocumentPackage(tanggal, rows) {
       <w:insideV w:val="single" w:sz="4" w:color="000000"/>
     </w:tblBorders>`;
 
-  const W_NO = 700, W_NAMA = 4200, W_KELAS = 1200, W_TTD = 2300;
+  // Untuk Izin, tabel dapat kolom tambahan "Alasan" — lebar kolom lain disusutkan
+  // sedikit supaya total tetap muat dalam lebar halaman.
+  const W_NO = 700;
+  const W_NAMA = isIzin ? 3200 : 4200;
+  const W_KELAS = isIzin ? 1000 : 1200;
+  const W_ALASAN = isIzin ? 2300 : 0;
+  const W_TTD = isIzin ? 2100 : 2300;
 
-  const headerRow = `<w:tr>${
-    docxCell("No", { bold: true, width: W_NO, center: true })
-  }${
-    docxCell("Nama Lengkap", { bold: true, width: W_NAMA })
-  }${
+  const headerCells = [
+    docxCell("No", { bold: true, width: W_NO, center: true }),
+    docxCell("Nama Lengkap", { bold: true, width: W_NAMA }),
     docxCell("Kelas", { bold: true, width: W_KELAS, center: true })
-  }${
-    docxCell("Tanda Tangan", { bold: true, width: W_TTD, center: true })
-  }</w:tr>`;
+  ];
+  if (isIzin) headerCells.push(docxCell("Alasan", { bold: true, width: W_ALASAN }));
+  headerCells.push(docxCell("Tanda Tangan", { bold: true, width: W_TTD, center: true }));
+  const headerRow = `<w:tr>${headerCells.join("")}</w:tr>`;
+
+  const emptyColCount = isIzin ? 5 : 4;
+  const emptyLabel = isIzin ? "(Tidak ada data izin)" : "(Tidak ada data kehadiran)";
 
   let bodyRows;
   if (rows.length === 0) {
-    bodyRows = `<w:tr>${docxCell("", { width: W_NO, center: true })}${docxCell("(Tidak ada data kehadiran)", { width: W_NAMA })}${docxCell("", { width: W_KELAS })}${docxCell("", { width: W_TTD })}</w:tr>`;
+    const cells = [docxCell("", { width: W_NO, center: true }), docxCell(emptyLabel, { width: W_NAMA }), docxCell("", { width: W_KELAS })];
+    if (isIzin) cells.push(docxCell("", { width: W_ALASAN }));
+    cells.push(docxCell("", { width: W_TTD }));
+    bodyRows = `<w:tr>${cells.join("")}</w:tr>`;
   } else {
     bodyRows = rows.map((r, idx) => {
       const kelas = `${r.tingkat || ""}-${r.rombel || ""}`;
@@ -800,41 +1122,61 @@ function buildDocumentPackage(tanggal, rows) {
       } else {
         ttdCell = docxCell("-", { width: W_TTD, center: true });
       }
-      return `<w:tr>${docxCell(String(idx + 1), { width: W_NO, center: true })}${docxCell(r.nama, { width: W_NAMA })}${docxCell(kelas, { width: W_KELAS, center: true })}${ttdCell}</w:tr>`;
+      const cells = [
+        docxCell(String(idx + 1), { width: W_NO, center: true }),
+        docxCell(r.nama, { width: W_NAMA }),
+        docxCell(kelas, { width: W_KELAS, center: true })
+      ];
+      if (isIzin) cells.push(docxCell(r.alasan || "", { width: W_ALASAN }));
+      cells.push(ttdCell);
+      return `<w:tr>${cells.join("")}</w:tr>`;
     }).join("");
   }
 
+  const totalWidth = W_NO + W_NAMA + W_KELAS + W_ALASAN + W_TTD;
+  const gridCols = [`<w:gridCol w:w="${W_NO}"/>`, `<w:gridCol w:w="${W_NAMA}"/>`, `<w:gridCol w:w="${W_KELAS}"/>`];
+  if (isIzin) gridCols.push(`<w:gridCol w:w="${W_ALASAN}"/>`);
+  gridCols.push(`<w:gridCol w:w="${W_TTD}"/>`);
+
   const table = `
     <w:tbl>
-      <w:tblPr>${borders}<w:tblW w:w="${W_NO + W_NAMA + W_KELAS + W_TTD}" w:type="dxa"/></w:tblPr>
-      <w:tblGrid><w:gridCol w:w="${W_NO}"/><w:gridCol w:w="${W_NAMA}"/><w:gridCol w:w="${W_KELAS}"/><w:gridCol w:w="${W_TTD}"/></w:tblGrid>
+      <w:tblPr>${borders}<w:tblW w:w="${totalWidth}" w:type="dxa"/></w:tblPr>
+      <w:tblGrid>${gridCols.join("")}</w:tblGrid>
       ${headerRow}
       ${bodyRows}
     </w:tbl>`;
 
-  const header = [
+  const titleText = isIzin ? "DAFTAR TIDAK HADIR / IZIN EKSTRAKURIKULER" : "DAFTAR HADIR EKSTRAKURIKULER";
+
+  const headerLines = [
     docxParagraph("PEMERINTAH DAERAH PROVINSI JAWA TIMUR", { bold: true, size: 24 }),
     docxParagraph("DINAS PENDIDIKAN", { bold: true, size: 24 }),
     docxParagraph("SMA NEGERI 1 LUMAJANG", { bold: true, size: 28 }),
     docxParagraph("Jl. Jendral Ahmad Yani No.07 Telp./Fax (0334) 881747. Lumajang 67316", { size: 18 }),
     docxParagraph("Website : www.sman1lmj.sch.id   e-mail : smanegerisatulumajang@gmail.com", { size: 18 }),
     `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr><w:spacing w:before="80" w:after="140"/></w:pPr></w:p>`,
-    docxParagraph("DAFTAR HADIR EKSTRAKURIKULER", { bold: true, size: 26 }),
+    docxParagraph(titleText, { bold: true, size: 26 }),
     `<w:p><w:pPr><w:spacing w:after="140"/></w:pPr></w:p>`,
     docxInfoLine("Nama Ekskul", "Media Center X Kepenulisan"),
     docxInfoLine("Hari/Tanggal", `${hariIndoJS(tanggal)}, ${tanggalLabelJS(tanggal)}`),
-    docxInfoLine("Pembina", PEMBINA_NAME),
-    docxInfoLineBlank("Pemateri"),        // diisi manual pakai pensil setelah dicetak
-    docxInfoLineBlank("Materi/Kegiatan"), // baris kosong bergaris untuk ditulis tangan pakai pensil
-    `<w:p><w:pPr><w:spacing w:after="140"/></w:pPr></w:p>`
-  ].join("");
+    docxInfoLine("Pembina", PEMBINA_NAME)
+  ];
+  if (!isIzin) {
+    // Field "Pemateri"/"Materi" hanya relevan untuk daftar hadir pertemuan,
+    // tidak untuk daftar tidak-hadir/izin.
+    headerLines.push(docxInfoLineBlank("Pemateri"));        // diisi manual pakai pensil setelah dicetak
+    headerLines.push(docxInfoLineBlank("Materi/Kegiatan")); // baris kosong bergaris untuk ditulis tangan pakai pensil
+  }
+  headerLines.push(`<w:p><w:pPr><w:spacing w:after="140"/></w:pPr></w:p>`);
+  const header = headerLines.join("");
 
   // ---- Heuristik: dorong blok tanda tangan Pembina supaya selalu jatuh di
   // dekat bagian bawah halaman, apa pun jumlah baris kehadirannya. Estimasi
   // kasar dalam twips (1 cm = 567 twips) berdasarkan tinggi rata-rata tiap
   // elemen; tidak pixel-perfect tapi cukup akurat untuk kelas ~10-40 siswa. ----
   const PAGE_USABLE_TWIPS = 16838 - 1134 * 2;   // tinggi A4 dikurangi margin atas+bawah
-  const HEADER_FIXED_TWIPS = 4700;              // kop surat + judul + 6 baris info (dikalibrasi dari render nyata)
+  // kop surat + judul + info — Izin punya 2 baris lebih sedikit (tanpa Pemateri/Materi)
+  const HEADER_FIXED_TWIPS = isIzin ? 4000 : 4700;
   const TABLE_HEADER_ROW_TWIPS = 420;
   const DATA_ROW_TWIPS = 720;                   // per baris (dipengaruhi tinggi gambar ttd)
   const FOOTER_BLOCK_TWIPS = 1900;              // blok Mengetahui/Pembina/nama
@@ -906,15 +1248,16 @@ const RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>`;
 
-async function exportDocx(tanggal) {
-  const rows = getRowsForDate(tanggal);
+async function exportDocx(tanggal, type) {
+  type = type || "HADIR";
+  const rows = getRowsForDate(tanggal, type);
   if (rows === null) {
     alert("Data pertemuan tidak ditemukan. Coba muat ulang dashboard.");
     return;
   }
 
   try {
-    const pkg = buildDocumentPackage(tanggal, rows);
+    const pkg = buildDocumentPackage(tanggal, rows, type);
 
     const files = [
       { name: "[Content_Types].xml", content: CONTENT_TYPES_XML },
@@ -932,7 +1275,8 @@ async function exportDocx(tanggal) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Absensi_Media_Center_${tanggal}.docx`;
+    const prefix = type === "IZIN" ? "TidakHadir_Media_Center" : "Absensi_Media_Center";
+    a.download = `${prefix}_${tanggal}.docx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
